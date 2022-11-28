@@ -1,0 +1,1407 @@
+---
+title: 'SDS-2 Project: Stroke Prediction'
+author: "Michele Luca Puzzo - 1783133"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+library("mlbench")
+library("smotefamily")
+library("caret")
+library("R2jags")
+
+require(tidyverse)
+require(magrittr)
+require(R2jags)
+require(bayesplot)
+require(TeachingDemos)
+require(factoextra)
+require(highcharter)
+require(dplyr)
+
+# loading the categeories
+load_cat <- function(frame) {
+  sorted_df <- frame %>%
+              drop_na() %>%
+              dplyr::summarise(Count = n()) %>%
+              dplyr::arrange(desc(Count)) %>%
+              dplyr::mutate(percentage = paste0(round(Count / sum(Count) * 100, 1), "%"))
+    
+    return(sorted_df)
+}
+
+# getting the histograms and the relative summaries, using meanwhile hchart for plotting the hists
+hist.and.summary <- function(variable, main.title, colore){
+  print(summary(dat[[variable]])) 
+  hchart(dat[[variable]], type = "column", name = variable, color = colore) %>%
+    hc_title(text = main.title) %>%
+    hc_xAxis(title = variable) %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=2, beta=-10, 
+                              depth=100, viewDistance=25)) %>% 
+    hc_plotOptions(column=list(depth= 100))
+}
+
+# Showing the density considering the two cases of having a stroke or not
+dense.chart <- function(name, title){
+  
+  # select the interested rows
+  frame <- dat[ , (names(dat) %in% c(name, 'output'))] 
+
+  # sub select the two categories
+  normal <- frame %>% filter(output == 0)
+  stroke <- frame %>% filter(output == 1)
+
+  hchart( density(unlist(normal[, name])), type = "area", name = "Normal") %>%
+      hc_add_series( density(unlist(stroke[, name])), type = "area", name = "Stroke") %>%
+        hc_title(text= title) %>%
+          hc_xAxis(title = name)
+}
+
+chart <- function(feature, title){
+  normal = dat[feature][dat["stroke"] == 0]
+
+  stroke = dat[feature][dat["stroke"] == 1]
+
+  hchart(density(normal),type="area",name="Healthy", color = "green")%>%
+    hc_add_series(density(stroke), type = "area", name = "Stroke", color = "orange") %>%
+      hc_title(text= title) %>%
+        hc_xAxis(title = title)
+}
+```
+
+## Why this topic? 
+
+A stroke is a serious life-threatening medical condition that happens when the blood supply to part of the brain is cut off or when a blood vessel in the brain bursts. In either case, brain cells can be damaged or die.
+
+The impact of stroke can be short- and long-term, depending on which part of the brain is affected and how quickly it is treated.
+A stroke can cause lasting brain damage, wide-ranging disabilities, or even death.
+
+According to the World Health Organization (WHO) stroke is the 2nd leading cause of death globally, responsible for approximately 11% of total deaths. Over 110 million people in the world have experienced stroke. [1]
+
+Specifically also in Italy is the 2nd cause leading cause of death indeed almost 200,000 cases are recorded every year and this phenomenon is increasing constantly since the ageing of the population. [2]
+
+Nowadays prevention is an important public health concern, so for this reason is crucial to understand better its causes and improve the capacity to predict if a person could have a stroke in her life. 
+
+## Dataset
+
+This dataset, that I have taken from Kaggle, is used to predict whether a patient is likely to get stroke based on the input parameters like gender, age, various diseases, and smoking status. Each row in the data provides relevant information about the patient. 
+In particular this dataset considers 5110 patients and for each of them 10 features are specified. Moreover each patient has a label which points out if she had a stroke or not. [3]
+
+In this dataset some missing values (201) occur only in the BMI column and they will be adequately treated.
+
+```{r echo=FALSE, warning=FALSE}
+dat <- read.csv("stroke.csv")
+head(dat)
+```
+
+Who builds this dataset has collected for each patient the following information:
+
+- **Gender**
+- **Age**
+- **Hypertension**:
+    * *0* if the patient doesn't have hypertension (high blood pressure)
+    * *1* otherwise
+- **Heart Disease**:
+    * *0* if the patient doesn't have any heart diseases
+    * *1* otherwise
+- **Ever Married**:
+    * *Yes* if the patient has been married at least once in her lifetime
+    * *No* otherwise
+- **Work Type**:
+    * *children*
+    * *Govt_job*: Government job
+    * *Never_worked*: 
+    * *Private* 
+    * *Self-employed*
+- **Residence_type**:
+    * *Urban* patient lives in a city
+    * *Rural* patient lives in the countryside
+- **Avg_glucose_level** (average glucose level in blood)
+- **bmi** (Body Mass Index)
+- **smoking_status**:
+    * *formerly smoked*
+    * *never smoked*
+    * *smokes*
+    * *Unknown*
+- **stroke**:
+    * *1* if the patient had a stroke
+    * *0* otherwise
+
+```{r set_seed, echo=FALSE}
+a = (dat["bmi"] == "N/A")
+for(i in 1:length(a)){
+  if(a[i] == "TRUE"){
+    dat[i,"bmi"] = 0
+  }
+}
+dat["bmi"] = lapply(dat["bmi"], function(x) as.numeric(as.character(x)))
+
+media_bmi <- mean(dat["bmi"][dat["bmi"] != 0])
+
+for(i in 1:length(a)){
+  if(dat[i,"bmi"] == 0){
+    dat[i,"bmi"] = media_bmi
+  }
+}
+```
+
+## EDA
+
+To have a clear idea of the dataset and to understand who are the patient which I am observing I have made for each categorical variable a pie-chart counting for each category the number of occurrences and consequently the percentage of that category. To do these visualizations I have followed an online guide which uses *highcharter* and *dplyr* as library. [12]  
+
+```{r echo=FALSE}
+get_gender_str <- function(bool_var){ 
+  char_list <- c(1, length(bool_var))
+  for (i in 1:length(bool_var)) {
+    var <- bool_var[i]
+    new_char <- 'Other'  
+    
+    if(var == "Male"){
+        new_char <- 'Male'
+    }
+      
+    if(var == "Female"){
+        new_char <- 'Female'
+    }
+      
+     char_list[i] <-  new_char
+   }
+    
+    return(char_list)
+ }
+
+# extract for each type of chest pain the relative percentage
+gender_dat <- dat %>% 
+    dplyr::select(gender) %>%
+    dplyr::group_by(gender) %>%
+    dplyr::summarise(Count = n()) %>%
+    dplyr::arrange(desc(Count)) %>%
+    dplyr::mutate(
+        gender_str = get_gender_str(gender),
+        percentage = paste0(round(Count / sum(Count) * 100, 1), "%")
+    )
+
+# plotting the gender_dat
+gender_dat %>%
+  hchart(type = "pie", hcaes(x = paste(gender_str, ' \t(', percentage, ')' ), y = Count, color =c("#ffc0cb","#4286f4", "#d66048"))) %>%
+    hc_xAxis(title = 'Gender', categories = paste(gender_dat$gender_str, ' (', gender_dat$percentage, ')' )) %>%
+    hc_title(text = 'Gender') %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=45, beta=0))%>%
+    hc_plotOptions(pie=list(innerSize= 100, 
+                            depth= 45))
+
+```
+
+Regarding the gender of the patients, dataset is pretty balanced, even if females are the majority. Just one person has declared as gender "Other". 
+
+```{r echo=FALSE}
+get_string <- function(bool_var){ # get the type of hypertension
+  char_list <- c(1, length(bool_var))
+  for (i in 1:length(bool_var)) {
+    var <- bool_var[i]
+    new_char <- 'unknown'  
+    
+    if(var == 1){
+        new_char <- 'Patient has hypertension'
+    }
+    else{
+        new_char <- 'Healthy'
+     }
+      
+     char_list[i] <-  new_char
+   }
+    
+    return(char_list)
+ }
+
+# creating the dataframe for using it in the next lines of code
+hypertension_dat <- dat %>% 
+    dplyr::select(hypertension) %>%
+    dplyr::group_by(hypertension) %>%
+    dplyr::summarise(Count = n()) %>%
+    dplyr::arrange(desc(Count)) %>%
+    dplyr::mutate(
+        hypertension_str = get_string(hypertension),
+        percentage = paste0(round(Count / sum(Count) * 100, 1), "%")
+    )
+
+# plotting the dataframe obtained before
+hypertension_dat %>%
+  hchart(type = "pie", hcaes(x = paste(hypertension_str, ' \t(', percentage, ')' ), y = Count, color =c("#7CFC00","#F00"))) %>%
+    hc_xAxis(title = 'Hypertension', categories = paste(get_string(hypertension_dat$hypertension_str), ' (', hypertension_dat$percentage, ')' )) %>%
+    hc_title(text = 'Hypertension') %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=45)) %>% 
+    hc_plotOptions(pie=list(innerSize= 100, 
+                            depth= 45))
+```
+
+From the second pie-chart instead it is observable that less than 10% of the patients are affected by hypertension, or high blood pressure. 
+
+```{r echo=FALSE}
+get_string <- function(bool_var){ 
+  char_list <- c(1, length(bool_var))
+  for (i in 1:length(bool_var)) {
+    var <- bool_var[i]
+    new_char <- 'unknown'  
+    
+    if(var == 1){
+        new_char <- 'Patient has heart diseases'
+    }
+    else{
+        new_char <- 'Healthy'
+     }
+      
+     char_list[i] <-  new_char
+   }
+    
+    return(char_list)
+ }
+
+# creating the dataframe for using it in the next lines of code
+heart_disease_dat <- dat %>% 
+    dplyr::select(heart_disease) %>%
+    dplyr::group_by(heart_disease) %>%
+    dplyr::summarise(Count = n()) %>%
+    dplyr::arrange(desc(Count)) %>%
+    dplyr::mutate(
+        heart_disease_str = get_string(heart_disease),
+        percentage = paste0(round(Count / sum(Count) * 100, 1), "%")
+    )
+
+# plotting the dataframe obtained before
+heart_disease_dat %>%
+  hchart(type = "pie", hcaes(x = paste(heart_disease_str, ' \t(', percentage, ')' ), y = Count,
+                             color =c("#7CFC00","#F00"))) %>%
+    hc_xAxis(title = 'Heart Disease', categories = paste(get_string(heart_disease_dat$heart_disease_str), ' (', heart_disease_dat$percentage, ')' )) %>%
+    hc_title(text = 'Heart Disease') %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=45)) %>% 
+    hc_plotOptions(pie=list(innerSize= 100, 
+                            depth= 45))
+```
+
+Even less people suffer of some heart diseases, indeed just 5.4% are affected by them. 
+
+```{r echo=FALSE}
+get_string <- function(bool_var){ # get the type of ever_married
+  char_list <- c(1, length(bool_var))
+  for (i in 1:length(bool_var)) {
+    var <- bool_var[i]
+    new_char <- 'unknown'  
+    
+    if(var == "Yes"){
+        new_char <- 'Married or has been Married'
+    }
+    else{
+        new_char <- 'Single'
+     }
+      
+     char_list[i] <-  new_char
+   }
+    
+    return(char_list)
+ }
+
+# creating the dataframe for using it in the next lines of code
+ever_married_dat <- dat %>% 
+    dplyr::select(ever_married) %>%
+    dplyr::group_by(ever_married) %>%
+    dplyr::summarise(Count = n()) %>%
+    dplyr::arrange(desc(Count)) %>%
+    dplyr::mutate(
+        ever_married_str = get_string(ever_married),
+        percentage = paste0(round(Count / sum(Count) * 100, 1), "%")
+    )
+
+# plotting the dataframe obtained before
+ever_married_dat %>%
+  hchart(type = "pie", hcaes(x = paste(ever_married_str, ' \t(', percentage, ')' ), y = Count, color =c("#FFFF00","#808080"))) %>%
+    hc_xAxis(title = 'Ever Married', categories = paste(get_string(ever_married_dat$ever_married_str), ' (', ever_married_dat$percentage, ')' )) %>%
+    hc_title(text = 'Ever Married') %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=45)) %>% 
+    hc_plotOptions(pie=list(innerSize= 100, 
+                            depth= 45))
+```
+
+From the pie-chart about married people it is possible to notice that almost 2 people out of 3 have been married at least one time in their lifetime.
+
+```{r echo=FALSE}
+get_string <- function(bool_var){ # get the type of Residence_type
+  char_list <- c(1, length(bool_var))
+  for (i in 1:length(bool_var)) {
+    var <- bool_var[i]
+    new_char <- 'unknown'  
+    
+    if(var == "Urban"){
+        new_char <- 'Urban'
+    }
+    else{
+        new_char <- 'Rural'
+     }
+      
+     char_list[i] <-  new_char
+   }
+    
+    return(char_list)
+ }
+
+# creating the dataframe for using it in the next lines of code
+Residence_type_dat <- dat %>% 
+    dplyr::select(Residence_type) %>%
+    dplyr::group_by(Residence_type) %>%
+    dplyr::summarise(Count = n()) %>%
+    dplyr::arrange(desc(Count)) %>%
+    dplyr::mutate(
+        Residence_type_str = get_string(Residence_type),
+        percentage = paste0(round(Count / sum(Count) * 100, 1), "%")
+    )
+
+# plotting the dataframe obtained before
+Residence_type_dat %>%
+  hchart(type = "pie", hcaes(x = paste(Residence_type_str, ' \t(', percentage, ')' ), y = Count, color =c("#808080", "#FFFF00"))) %>%
+    hc_xAxis(title = 'Residence Type', categories = paste(get_string(Residence_type_dat$Residence_type_str), ' (', Residence_type_dat$percentage, ')' )) %>%
+    hc_title(text = 'Residence Type') %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=45)) %>% 
+    hc_plotOptions(pie=list(innerSize= 100, 
+                            depth= 45))
+```
+
+Patients are pretty balanced from the point of view of their residence: circa the half of them live in a city while the other half live in the countryside. 
+
+```{r echo=FALSE}
+get_work_type_str <- function(bool_var){ 
+  char_list <- c(1, length(bool_var))
+  for (i in 1:length(bool_var)) {
+    var <- bool_var[i]
+    new_char <- 'unknown'  
+    
+    if(var == "children"){
+        new_char <- 'Children'
+    }
+    if(var == "Govt_job"){
+        new_char <- 'Governament Job'
+    }
+    if(var == "Never_worked"){
+        new_char <- "Never worked"
+    }
+    if(var == "Private"){
+        new_char <- "Private"
+    }
+    if(var == "Self-employed"){
+      new_char <- "Self-employed"
+    }
+    
+      
+     char_list[i] <-  new_char
+   }
+    
+    return(char_list)
+ }
+
+# creating the dataframe for using it in the next lines of code
+work_type_dat <- dat %>% 
+    dplyr::select(work_type) %>%
+    dplyr::group_by(work_type) %>%
+    dplyr::summarise(Count = n()) %>%
+    dplyr::arrange(desc(Count)) %>%
+    dplyr::mutate(
+        work_type_str = get_work_type_str(work_type),
+        percentage = paste0(round(Count / sum(Count) * 100, 1), "%")
+    )
+
+# using the dataframe to plot it
+work_type_dat %>%
+  hchart(type = "pie", hcaes(x = paste(work_type_str, ' \t(', percentage, ')' ), y = Count)) %>%
+    hc_xAxis(title = 'work_type', categories = paste(work_type_dat$work_type_str, ' (', work_type_dat$percentage, ')' )) %>%
+    hc_title(text = 'Work type') %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=45)) %>% 
+    hc_plotOptions(pie=list(innerSize= 100, 
+                            depth= 45))
+```
+
+Just 22 patients have never worked, while the majority of them work privately. There are almost 700 children while the the remaining part of the patients have a governament job or are self-employed.
+
+```{r echo=FALSE}
+get_smoking_status_str <- function(bool_var){ # get the smoking_status
+  char_list <- c(1, length(bool_var))
+  for (i in 1:length(bool_var)) {
+    var <- bool_var[i]
+    new_char <- 'unknown'  
+    
+    if(var == "formerly smoked"){
+        new_char <- 'Formerly smoked'
+    }
+    if(var == "never smoked"){
+        new_char <- 'Never smoked'
+    }
+    if(var == "smokes"){
+        new_char <- "Smokes"
+    }
+      
+     char_list[i] <-  new_char
+   }
+    
+    return(char_list)
+ }
+
+# creating the dataframe for using it in the next lines of code
+smoking_status_dat <- dat %>% 
+    dplyr::select(smoking_status) %>%
+    dplyr::group_by(smoking_status) %>%
+    dplyr::summarise(Count = n()) %>%
+    dplyr::arrange(desc(Count)) %>%
+    dplyr::mutate(
+        smoking_status_str = get_smoking_status_str(smoking_status),
+        percentage = paste0(round(Count / sum(Count) * 100, 1), "%")
+    )
+
+# using the dataframe to plot it
+smoking_status_dat %>%
+  hchart(type = "pie", hcaes(x = paste(smoking_status_str, ' \t(', percentage, ')' ), y = Count)) %>%
+    hc_xAxis(title = 'Smoking Status', categories = paste(smoking_status_dat$smoking_status_str, ' (', smoking_status_dat$percentage, ')' )) %>%
+    hc_title(text = 'Smoking Status') %>%
+    hc_add_theme(hc_theme_google()) %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=45)) %>% 
+    hc_plotOptions(pie=list(innerSize= 100, 
+                            depth= 45))
+```
+
+The smoking status of more than 1500 patients is unknown while almost 1900 ones have never smoked. Just circa 800 people actually smokes. Since the smoking status of a lot of people is unknown I have decided to treat "unknown" as a category, and not as missing values also because maybe there are people who smoke electronic cigarettes or smoke once in a while so it would be difficult classify them. 
+
+```{r, echo=FALSE, fig.width = 8, fig.height = 6}
+hist.and.summary('age', 'Persons Age', "orchid")
+```
+
+I have tried to represent the distribution of the age of patients through an histogram in which it is observable that the majority of people are between 50 and 55 years while the bin that contains less people is the one between 80 and 85 people. In general the majority of the patients are adults, but in the overall this distribution is quite uniform. 
+
+```{r, echo=FALSE, fig.width = 8, fig.height = 6}
+print(summary(dat[["avg_glucose_level"]])) 
+hchart(dat[["avg_glucose_level"]], type = "column", name = "avg_glucose_level", color = "lightblue") %>%
+hc_title(text = "Average Glucose Level [mg/dl]") %>%
+hc_xAxis(title = "Average Glucose Level") %>%
+  hc_chart(options3d=list(enabled=TRUE, alpha=2, beta=-10, 
+                            depth=100, viewDistance=25)) %>% 
+  hc_plotOptions(column=list(depth= 100))
+```
+
+The distribution of the average glucose level seems a Bimodal distribution in which the groups are healthy and diabetic people. The two peaks are in correspondence of 80 and 210 mg/dl. These values are reasonable indeed healthy people have an average glucose level between 70 and 99 mg/dl. While a level over 130 mg/dl is a symptom of the diabetes. So I have thought that the majority of people is healthy while just few patients could be affected by the diabetes. [4]
+
+```{r, echo=FALSE, fig.width = 8, fig.height = 6}
+hist.and.summary('bmi', 'BMI', "orange")
+```
+
+The distribution of the BMI seems a Gaussian in which the peak is in correspondence of BMI between 26 and 27. I am not considering the peak in correspondence between 28 and 29 because that one is due to the missing values. (The mean of BMI is 28.89)
+These values are reasonable indeed normal weight people have a BMI between 18.5 and 25 while BMI between 25 and 35 points out a light overweight in that person. [5] 
+
+Now I have filtered the dataset according to the label so to separate healthy people and patients who had the stroke and then I have plotted the distributions of the continuous variables for each of the two group. I have done it to observe if considering just people who had the stroke the distributions of these features would change. 
+
+```{r, echo=FALSE}
+chart("age", "Person Age")
+```
+
+As expected the distribution of the age of just sick patient is not anymore pretty uniform, but it is strongly shifted towards higher age and the distribution has a peak at 78 years. This plot confirm the intuitive idea that people who had a stroke are generally older: the majority of them are adults older than 53 years old. 
+
+```{r, echo=FALSE}
+chart("bmi", "Person BMI")
+```
+
+Also the distribution of the BMI of sick people is slightly shifted towards higher values, and it has peak in correspondence of the mean of BMI, circa 28.7. So I think that a lot of missing values in BMI column belong to patients who had a stroke and generally they weight a bit more than healthy patients. 
+
+```{r, echo=FALSE}
+chart("avg_glucose_level", "Average Glucose Level")
+```
+
+The distribution of the average glucose level is still a mixture of Gaussian with two components, but people who had a stroke as expected tend to have an higher level of glucose and so the majority of them belong to the second bell, while most of the healthy people have an average glucose level in the norm.  
+
+```{r echo=FALSE}
+get_string <- function(bool_var){ # get the type of stroke
+  char_list <- c(1, length(bool_var))
+  for (i in 1:length(bool_var)) {
+    var <- bool_var[i]
+    new_char <- 'unknown'  
+    
+    if(var == 1){
+        new_char <- 'Patient had a stroke'
+    }
+    else{
+        new_char <- 'Healthy'
+     }
+     char_list[i] <-  new_char
+   }
+    return(char_list)
+ }
+
+# creating the dataframe for using it in the next lines of code
+stroke_dat <- dat %>% 
+    dplyr::select(stroke) %>%
+    dplyr::group_by(stroke) %>%
+    dplyr::summarise(Count = n()) %>%
+    dplyr::arrange(desc(Count)) %>%
+    dplyr::mutate(
+        stroke_str = get_string(stroke),
+        percentage = paste0(round(Count / sum(Count) * 100, 1), "%")
+    )
+
+# plotting the dataframe obtained before
+stroke_dat %>%
+  hchart(type = "pie", hcaes(x = paste(stroke_str, ' \t(', percentage, ')' ), y = Count,
+                             color =c("#90EE90","#FF7F7F"))) %>%
+    hc_xAxis(title = 'Stroke', categories = paste(get_string(stroke_dat$stroke_str), ' (', stroke_dat$percentage, ')' )) %>%
+    hc_title(text = 'Stroke') %>%
+    hc_chart(options3d=list(enabled=TRUE, alpha=45)) %>% 
+    hc_plotOptions(pie=list(innerSize= 100, 
+                            depth= 45))
+```
+
+To conclude I have observed that there are just 249 patients so just the 4.9% of the entire dataset had a stroke, while all the others 4861 are healthy. This is the main drawback of this dataset, strongly unbalanced, and it would be better have a more balanced dataset in which the number of patients who had stroke was comparable with healthy patients. 
+
+The imbalance problem could bias classiﬁcation algorithms to majority class and make classiﬁers have bad classiﬁcation performance on minority class. Such classiﬁers are not useful in real world tasks, because usually the classiﬁcation performance of the minority samples is of higher importance for decision making in the healthcare area.[6] 
+
+To cope with this problem it would be necessary to resort to undersampling or oversampling techniques. But since the former lead to information loss (and in this specific case throwing away examples is not a good ideas since the dataset is quite small), and the latter suffer from huge computational cost as first step I am going to tackle this dataset as it is and only in a second step I am going to apply one of these techniques to observe what are the changes. 
+
+## Encoding
+
+To build my model, but also to draw the correlation matrix among my features I cannot have characters in my dataset, so first of all I have performed an ordinal encoding to pass from *character* to *integer* type. For example for the feature **gender** I have assigned 0 to males, 1 to females and 2 to others. I have done it in analogous way for the features **ever_married**, **Residence_type**,**work_type** and **smoking_status**.
+
+```{r echo=FALSE}
+dat_1 <- dat
+for(i in 1:nrow(dat_1)){
+  
+  if(dat_1[i, "gender"] == "Male"){
+    dat_1[i, "gender"] = 0
+  }else if (dat_1[i, "gender"] == "Female"){
+    dat_1[i, "gender"] = 1
+  }else{
+    dat_1[i, "gender"] = 2
+  }
+  
+  if(dat_1[i, "ever_married"] == "Yes"){
+    dat_1[i, "ever_married"] = 0
+  }else{
+    dat_1[i, "ever_married"] = 1
+  }
+  
+  if(dat_1[i, "Residence_type"] == "Urban"){
+    dat_1[i, "Residence_type"] = 1
+  }else{
+    dat_1[i, "Residence_type"] = 0
+  }
+  
+  if(dat_1[i, "work_type"] == "Private"){
+    dat_1[i, "work_type"] = 0
+  } else if(dat_1[i, "work_type"] == "Self-employed") {
+    dat_1[i, "work_type"] = 1
+  } else if(dat_1[i, "work_type"] == "Govt_job") {
+    dat_1[i, "work_type"] = 2
+  } else if(dat_1[i, "work_type"] == "Never_worked") {
+    dat_1[i, "work_type"] = 3
+  } else{
+    dat_1[i, "work_type"] = 4
+  }
+  
+    
+  if(dat_1[i, "smoking_status"] == "smokes"){
+    dat_1[i, "smoking_status"] = 0
+  } else if(dat_1[i, "smoking_status"] == "formerly smoked"){
+    dat_1[i, "smoking_status"] = 1
+  }else if(dat_1[i, "smoking_status"] == "never smoked"){
+    dat_1[i, "smoking_status"] = 2
+  }else{
+    dat_1[i, "smoking_status"] = 3
+  }
+
+}
+dat_1["gender"] = lapply(dat_1["gender"], function(x) as.numeric(as.character(x)))
+dat_1["ever_married"] = lapply(dat_1["ever_married"], function(x) as.numeric(as.character(x)))
+dat_1["Residence_type"] = lapply(dat_1["Residence_type"], function(x) as.numeric(as.character(x)))
+dat_1["work_type"] = lapply(dat_1["work_type"], function(x) as.numeric(as.character(x)))
+dat_1["smoking_status"] = lapply(dat_1["smoking_status"], function(x) as.numeric(as.character(x)))
+#dat_1["stroke"] = lapply(dat_1["stroke"], function(x) as.numeric(as.character(x)))
+```
+
+### Correlation Matrix
+
+The correlations are measured considering the Pearson formula: 
+
+$\rho_{XY} = \frac{Cov(X,Y)}{\sigma_X \cdot \sigma_Y}$
+Where:
+
+- $Cov(X,Y)$ is the covariance between the two sets of values X and Y
+- $\sigma_X$ is the deviation standard of the set X
+- $\sigma_Y$ is the deviation standard of the set Y
+
+
+```{r echo=FALSE}
+hchart(round(cor(dat_1[, c(2:11)], method = "pearson"), digits = 2), color = randomcoloR::randomColor()) %>%
+  hc_plotOptions(
+             series = list(
+                borderColor = "#fcfbfa",
+                borderWidth = 1,
+                animation=(durtion=1000),
+                dataLabels = list(enabled = TRUE)
+  )) %>%
+  hc_title(text = "Correlations between all the variables") # considering only the whole data
+
+
+```
+
+ 
+From the correlation matrix it is notable that:
+
+- **gender** and **Residence_type** are uncorrelated to the rest of features
+
+- **age** is correlated mainly with **ever_married**, **work_type**. It is reasonable because older people tend to be married or they have faced a marriage in their life and probably they work (not children and never worked class). Indeed this negative correlation is due to how I have assigned the number to the class. The age is also linked to the smoking status, the BMI, but also to hypertension and heart diseases. So the **age** will be an important features because it could allow to understand a lot about a patient and the majority of the other features are related to it in some way. 
+
+## Feature Selection
+
+In this case I have not an excessive number of features and I could have used all, but I have tried to choose only those predictors which are necessary.
+
+Feature selection is the process of reducing the number of input variables when developing a predictive model.
+
+To do it I have look at an online guide [9]. In the *Backward Elimination* the model at the beginning is trained with all the predictors, but iteratively the least contributive predictor is removed. The training stops when you have a model where all predictors are statistically significant. I have read that some methods remove the features using the p-value while others evaluate the model through some metrics like RMSE. 
+
+Based on this training, I have plot the importance using the function *varImp* that tracks the changes in model statistics (RSS = residual sum of squares) and accumulates the reduction in the statistic when each predictor’s feature is added to the model. This total reduction is used as the variable importance measure. It is a positive number. [10] 
+
+As expected the *age* of the patient is the feature most important, followed by the *average glucose level*, *hypertension* and *heart disease*. While *gender* and *residence type* that are the features uncorrelated to the others, they have no importance. 
+
+As predictors I have chosen just the two most important features, because basically I had obtained the same results if I would have chosen the first four features. 
+
+```{r echo=FALSE}
+set.seed(1234)
+#sampling indices from the main dataset
+
+idxtr<-sample(1:nrow(dat), 0.7*nrow(dat))
+dat_train  <- dat_1[idxtr,]
+dat_test   <- dat_1[-idxtr,]
+N          <- nrow(dat_train)# number of train
+
+#control <- trainControl(method="repeatedcv", number=10, repeats=3)
+# train the model
+#model <- train(stroke~., data = dat_1[,2:12], method="lmStepAIC", trControl=control)
+
+# estimate variable importance
+model_param <- suppressWarnings(train(stroke~., data = dat_1[,2:12], method="leapBackward"))#, trControl=control))
+
+importance <- varImp(model_param, scale=FALSE, value = "rss")
+plot(importance)
+# Dependent Variable
+y <- as.factor(dat_train$stroke) # Target variable, risks stroke?
+
+# Independent Variables
+x1 <- as.vector(dat_train$gender)
+x2 <- as.vector(scale(dat_train$age)) 
+x3 <- as.vector(dat_train$hypertension) 
+x4 <- as.vector(dat_train$heart_disease)
+x5 <- as.vector(dat_train$ever_married)
+x6 <- as.vector(dat_train$work_type) 
+x7 <- as.vector(dat_train$Residence_type) 
+x8 <- as.vector(scale(dat_train$avg_glucose_level)) 
+x9 <- as.vector(scale(dat_train$bmi)) 
+x10 <- as.vector(dat_train$smoking_status)
+dat_1$stroke <- as.factor(dat_1$stroke)
+```
+
+## First Model
+
+The main goal is to do a Bayesian analysis, based on understanding if a patient had a stroke or not. First of all I have split the dataset randomly into training, 70%, and test, 30%. The response variable, **stroke** can be modeled as a Bernoulli distribution with a success probability (had a stroke) equals to $p_i$.
+
+So as first model, I have decided to consider the following Logistic Regression model with the logit as link function (linking probabilities with outputs. Its inverse is the sigmoid): 
+
+$logit(p_i) =  log\Big(\frac{p_i}{1-p_i}\Big)= \beta_{0} + \beta_{2} \cdot x_{2_i} +  \beta_{8} \cdot x_{8_i}$
+
+So it is a linear model of the logarithm of the odds ($\frac{p}{1-p}$) indeed the logit is also called the log-odds since it is equal to the logarithm of the odds. 
+
+The prior beta parameters are distributed following a normal distribution considering $\mu = 0$ and $\tau^2 = 0.000001$.
+Notice that $\tau^2 = \frac{1}{\sigma^{2}}$
+
+I have defined $\beta_i$ as Normal because they can take values between all real numbers and with that precision the prior distributions are not only concentrated on the mean.
+
+I have implemented the model using RJags and it is defined as follows: 
+
+```{r}
+#seed
+set.seed(1234)
+
+#sampling indices from the dataset
+idxtr <- sample(1:nrow(dat), 0.7*nrow(dat))
+dat_train  <- dat_1[idxtr,]
+dat_test   <- dat_1[-idxtr,]
+
+# number of train
+N <- nrow(dat_train)
+
+model <- function(){
+  for (i in 1:N){
+    y[i] ~ dbern(p[i])
+    logit(p[i]) <-  beta0 +  beta2*x2[i] + beta8*x8[i] 
+  }
+  
+  # Defining the prior beta parameters
+  beta0 ~ dnorm(0, 1.0E-6)
+  beta2 ~ dnorm(0, 1.0E-6)
+  beta8 ~ dnorm(0, 1.0E-6)
+}
+
+```
+
+```{r}
+# Passing the data for RJags
+y <- as.vector(dat_train$stroke)
+data.jags <- list("y" = y, "N" = N,
+                  "x2" = x2,
+                  "x8" = x8)
+
+# Defining parameters of interest to show after running RJags
+mod.params <- c("beta0", "beta2", "beta8")
+
+# Run JAGS
+n.chains <- 3
+t_start = Sys.time()
+mod.fit <- jags(data = data.jags,                                                   # DATA
+                model.file = model,                                                 # MODEL
+                parameters.to.save = mod.params,                                    # TRACKING
+                n.chains = n.chains, n.iter = 10000, n.burnin = 1000, n.thin = 10)  # MCMC
+tempo_fit1 = round(Sys.time() - t_start,2)
+mod.fit$BUGSoutput$summary
+```
+
+```{r, echo = FALSE}
+cat(paste("The DIC of the first model is: ", mod.fit$BUGSoutput$DIC))
+```
+
+I have not specified the inits so the starting values of the three chain is random accordingly to the prior distribution. My prior distribution is very flat so the starting point from the region where the posterior distribution will concentrate. But this will not be a problem in this case.
+
+$\beta_0$ is the intercept while $\beta_i$ measures the marginal impact of the predictor $X_i$ on the log-odds in favor of $Y = 1$.
+
+The summary shows the *mean*, point estimate for $beta_i$ and *sd* that tells how variable is the posterior distribution around this point estimate. The larger the *sd* the larger the credible interval. 
+
+I observe that all the estimated mean of $\beta_i$ are not zero and zero is not contained in the credible intervals so there is an evidence that the chosen predictors are significant for the model. Indeed if $\beta_i$ was zero it would mean that the corresponding predictors $x_i$ is not having an effect on the model. 
+
+*n.eff* is the effective sample size that can be considered as the number of independent Monte Carlo samples necessary to same precision of the MCMC samples. The greater this value, the lower the autocorrelation for that component. The idea is to have a sort of “exchange rate” between dependent and independent samples. To have some less dependence structure I have selected *n.thin = 10* so I take one iteration every ten. In this way I throw away a lot of iterations and I spend more to time to have an high number of them. Moreover I have thrown out the first 1000 iterations, *burn-in time*.
+
+*deviance* is a transformation of the likelihood function evaluation corresponding to all the parameters which are simulated in the MC. It is a sort of indication of whether I hit the most interesting region of the posterior distribution. I want that deviance decreases until it becomes stationary when it is reached the correct region.
+
+*DIC* is the Deviance Information Criterion  and it is the most popular criterion to select alternative models. DIC can be used only as a comparative index: there is no way of considering DIC on a standard absolute scale so it is useful
+only when different models are compared on the same data set. Lower values are better. 
+
+*Rhat* is the potential scale reduction. Gelman and Rubin diagnostic provide this quantity. It is related to the situation when there is more than one Markov chain. Comparison between variability among means of every MC wrt the overall mean and the variability of each MC. The values near 1 suggest convergence
+
+## Plots
+
+I show the uni-variate trace-plots of the simulations of each parameter. The idea of tracing plot is to look at the single component simulated over time. In fact if MC behaves properly tracing plot starts going up and down because it has been reached the stationarity region and it is exploring it in the appropriate way.
+
+Then I look also at the posterior distribution of each component of the parameter set to both the overlapping of the different chains and the posterior masses that is away from zero so an evidence that parameter matters. 
+
+```{r echo=FALSE, fig.align="center"}
+
+# Plots with BayesPlot
+chainArray <- mod.fit$BUGSoutput$sims.array
+#color_scheme_set("viridisB")
+# considering to split each couples of parameters
+mcmc_combo(chainArray, combo = c("dens_overlay", "trace"), pars = c("beta0", "beta2"))
+mcmc_combo(chainArray, combo = c("dens_overlay", "trace"), pars = c("beta8", "deviance"))
+
+#plot(density(chainArray[,,"deviance"]), xlim = c(1100,1300))
+
+```
+
+Now, I have plotted the *autocorrelation function plots* that are related to the way in which the next time point is related to the previous time points. In the y-axis there is an estimate of $Cor(\theta_t, \theta_{t+h})$, in other words how strong is the dependence of one simulation depending on the previous one. We expect if the process is stationary that the dependence becomes less and less vanishing eventually zero. So function stabilizes around zero. More slower it goes to zero the stronger is the dependence structure in the chain. 
+
+```{r echo=FALSE, fig.align="center", fig.width=10, fig.height=10}
+coda.fit <- coda::as.mcmc(mod.fit)
+coda::acfplot(coda.fit)
+
+#autocorr.diag(as.mcmc(mod.fit))
+```
+
+The ACFs follow good behaviours, because samples have to be independent each other during new iterations. The correlations are going further from the first lag so this is a good point!
+
+These are the plots of the running means: I am taking the empirical average $\mathbf{\hat{I}}_{t}$, approximation of the theoretical expectation at different times (using different number of actual simulations) and I see the converging behavior increasing the number of simulation. I can say what are the parameters that suffers more of autocorrelation and they will have an approximation error greater than iid case. 
+
+```{r echo=FALSE}
+df <- as.data.frame(mod.fit$BUGSoutput$sims.array)
+
+df %>%
+  hchart('line', hcaes(x = 1:nrow(df), y = cummean(df[, 1])), color = "red", name = "First Chain") %>%
+    hc_add_series( cummean(df[, 2]), type = "line", color = "blue", name = "Second Chain") %>%
+      hc_add_series( cummean(df[, 3]), type = "line", color = "green", name = "Thrid Chain") %>%
+        hc_title(text = "The Empirical Mean of beta0") %>%
+          hc_xAxis(title = list(text = "Iteration")) %>%
+            hc_yAxis(title = list(text = 'Cumulative Mean'))
+
+df %>%
+  hchart('line', hcaes(x = 1:nrow(df), y = cummean(df[, 4])), color = "red", name = "First Chain") %>%
+    hc_add_series( cummean(df[, 5]), type = "line", color = "blue", name = "Second Chain") %>%
+      hc_add_series( cummean(df[, 6]), type = "line", color = "green", name = "Thrid Chain") %>%
+        hc_title(text = "The Empirical Mean of beta2") %>%
+          hc_xAxis(title = list(text = "Iteration")) %>%
+            hc_yAxis(title = list(text = 'Cumulative Mean'))
+
+
+df %>%
+  hchart('line', hcaes(x = 1:nrow(df), y = cummean(df[, 7])), color = "red", name = "First Chain") %>%
+    hc_add_series( cummean(df[, 8]), type = "line", color = "blue", name = "Second Chain") %>%
+      hc_add_series( cummean(df[, 9]), type = "line", color = "green", name = "Thrid Chain") %>%
+        hc_title(text = "The Empirical Mean of beta8") %>%
+          hc_xAxis(title = list(text = "Iteration")) %>%
+            hc_yAxis(title = list(text = 'Cumulative Mean'))
+
+df %>%
+  hchart('line', hcaes(x = 1:nrow(df), y = cummean(df[, 10])), color = "red", name = "First Chain") %>%
+    hc_add_series( cummean(df[, 11]), type = "line", color = "blue", name = "Second Chain") %>%
+      hc_add_series( cummean(df[, 12]), type = "line", color = "green", name = "Thrid Chain") %>%
+        hc_title(text = "The Empirical Mean of deviance") %>%
+          hc_xAxis(title = list(text = "Iteration")) %>%
+            hc_yAxis(title = list(text = 'Cumulative Mean'))
+
+
+```
+
+Each parameter achieves in all of the three chains generated the same end point, so means that with different initial points in these three chains, I am strictly going to have the same estimated mean parameter.
+
+## Approximation Error
+
+Now I want to analyze the best approximation error for the MCMC sampling. I consider, essentially the square root of the MCSE.
+
+The variance formula in the MCMC sampling is:
+
+$\mathbf{V}[\hat{I}_{t}] = \frac{Var_{\pi}[h(X_{1})]}{t_{eff}} = \Big( 1 + 2 \sum_{k=1}^{\infty} \rho_{k}\Big)\frac{\sigma^{2}}{T}$
+
+The variance in MCMC algorithm is usually larger than iid simulation so MC is a bit inefficient. The more inefficient if the correlation is strong and positive. 
+
+Let's move on to calculate the MCSE: in this case we want to consider the MCSE that is the square root of the formula written above: 
+
+```{r, echo = FALSE}
+n <- length(colnames(mod.fit$BUGSoutput$sims.matrix))
+
+mcse_dataframe <- data.frame(MCSE_jointly = rep(NA, n))
+
+rownames(mcse_dataframe) <- colnames(mod.fit$BUGSoutput$sims.matrix)[1:n] 
+
+for(i in colnames(mod.fit$BUGSoutput$sims.matrix)[1:n]){
+  mcse_dataframe[i, "MCSE_jointly"] <- LaplacesDemon::MCSE(mod.fit$BUGSoutput$sims.matrix[ , i])
+}
+
+mcse_dataframe
+```
+
+As we can see the $\beta_2$ has the highest approximation error considering the jointly chains.
+
+## Posterior Uncertainty 
+
+The uncertainty is measured doing the ratio between the standard deviation of the parameter and its absolute expectation:
+
+```{r echo=FALSE}
+variab <- as.data.frame(mod.fit$BUGSoutput$summary[, c("mean","sd")])
+variab$uncertainty <- apply(variab, 1, function(x){
+  return(x["sd"]/abs(x["mean"]))
+})
+variab
+```
+
+The highest posterior uncertainty is about the $\beta_8$.
+
+## Estimated Correlations
+
+Now I have drawn the correlations between all the values calculated during the MCMC sampling:
+
+```{r echo=FALSE}
+hchart(round(cor(mod.fit$BUGSoutput$sims.matrix), digits = 2)) %>%
+  hc_plotOptions(
+             series = list(
+                borderColor = "#fcfbfa",
+                borderWidth = 1,
+                animation=(durtion=1000),
+                dataLabels = list(enabled = TRUE)
+  )) %>%
+  hc_title(text = "Correlations between all the parameters calculated") # considering only the whole data
+```
+
+There is an high correlation between the intercept $\beta_0$ and $\beta_2$.
+
+### Point Estimates
+
+```{r, echo =FALSE}
+chainMat <- mod.fit$BUGSoutput$sims.matrix
+
+
+# Point estimates
+(beta.hat.jags <- colMeans(chainMat))
+```
+
+### Equal Tail Credible Intervals
+
+I have decided to pool together all the chains and create the credible intervals and the point estimates for our estimated beta values.
+
+```{r, echo =FALSE}
+# Credible Intervals
+cred <- 0.95
+(p.ET.jags <- apply(chainMat, 2, quantile, 
+                    prob=c((1-cred)/2, 1-(1-cred)/2)))
+```
+
+### HPD
+
+They are smaller or equal than equal tail credible intervals.
+
+```{r, echo =FALSE}
+# What about the HPD?
+(p.HPD.jags <- coda::HPDinterval(as.mcmc(chainMat)))
+```
+
+It's relevant to reaffirm that all the parameters are significant to predict if a patient had a stroke or not. 
+
+## Tests of Convergence
+
+It would be interesting to observe if these multiple simulations of the markov chains achieve the convergences (formally convergence is never reached) and the validity of the stationarity regions. To observe it I have used the following tests:
+
+### Geweke Test
+
+"Geweke (1992) proposed a convergence diagnostic for Markov chains based on a test for equality of the means of the first and last part of a Markov chain (by default the first 10% and the last 50%). If the samples are drawn from the stationary distribution of the chain, the two means are equal and Geweke’s statistic has an
+asymptotically standard normal distribution." [11]
+
+"The test statistic is a standard Z-score: the difference between the two sample means divided by its estimated standard error."
+
+```{r, echo=FALSE}
+#coda::geweke.diag(coda.fit)
+
+gew_diag    <- geweke.diag(coda.fit)
+gew_diag_df <- cbind(gew_diag[[1]]$z,
+                     gew_diag[[2]]$z,
+                     gew_diag[[3]]$z)
+colnames(gew_diag_df) <- c("Z-score chain 1",
+                           "Z-score chain 2",
+                           "Z-score chain 3")
+gew_diag_df
+geweke.plot(coda.fit[[1]])
+```
+
+### Heidelberger and Welch's convergence diagnostic
+
+"The convergence test uses the Cramer-von-Mises statistic to test the null hypothesis that the sampled values come from a stationary distribution. The test is successively applied, firstly to the whole chain, then after discarding the first 10%, 20%, ... of the chain until either the null hypothesis is accepted, or 50% of the chain has been discarded. The latter outcome constitutes ‘failure’ of the stationarity test and indicates that a longer MCMC run is needed. If the stationarity test is passed, the number of iterations to keep and the number to discard are reported.
+
+The half-width test calculates a 95% confidence interval for the mean, using the portion of the chain which passed the stationarity test. Half the width of this interval is compared with the estimate of the mean. If the ratio between the half-width and the mean is lower than eps, the halfwidth test is passed. Otherwise the length of the sample is deemed not long enough to estimate the mean with sufficient accuracy."
+
+```{r, echo=FALSE}
+heidel_diag <- heidel.diag(coda.fit)
+heidel_diag[[1]]
+```
+
+The majority of the values are inside the acceptance area so it is almost always accepted the equality of the means.
+
+## Predictions
+
+Now it is interesting to observe the performance of the model on the test set, observations that the model still has not used. 
+
+```{r,echo=FALSE}
+dat_test[c(2,3,4,5,8,9,10)] <- lapply(dat_test[c(2,3,4,5,8,9,10)], function(x) c(scale(x))) 
+```
+```{r,echo=FALSE}
+# Saving the estimated beta parameters
+beta_est <- list("beta0" = mod.fit$BUGSoutput$summary["beta0", "mean"],
+                 "beta2" = mod.fit$BUGSoutput$summary["beta2", "mean"],
+                 "beta8" = mod.fit$BUGSoutput$summary["beta8", "mean"])
+
+#data unseen
+x_age_test  <- as.numeric(dat_test$age)
+x_glucose_test  <- as.numeric(dat_test$avg_glucose_level)
+
+pred <- beta_est$beta0 + beta_est$beta2*x_age_test +  beta_est$beta8*x_glucose_test 
+#sigmoid
+probs_pred <- exp(pred)/(1+exp(pred))
+
+## Select target variable
+y_test <- as.numeric(dat_test$stroke) 
+
+## Predictions
+y_pred<- rbinom(nrow(dat_test), 1, probs_pred)
+
+# Confusion matrix
+conf_mtx <- as.data.frame(round(table(dat_test$stroke, y_pred), digits = 3))
+
+#for balanced accuracy
+example1 <- confusionMatrix(data=as.factor(y_pred), reference = as.factor(dat_test$stroke), mode = "everything")
+```
+```{r,echo=FALSE}
+hchart(conf_mtx, type = "heatmap", hcaes(x = Var1, y = y_pred, value = Freq)) %>%
+  hc_title(text = "The Confusion Matrix") %>%
+  hc_plotOptions(
+             series = list(
+                borderColor = "#fcfbfa",
+                borderWidth = 1,
+                animation=(durtion=1000),
+                dataLabels = list(enabled = TRUE)
+  )) %>%
+      hc_xAxis(title=list(text="Actual Values"))  %>%
+         hc_yAxis(title=list(text="Predicted Values") )
+
+
+cat(paste("The overall accuracy is: ", example1$overall[1]))
+cat(paste("The balanced accuracy is: ", example1$byClass[11]))
+```
+
+In a highly imbalanced dataset, say a binary dataset with a class ratio of 95:5, a model that always predicts the majority class and completely ignores the minority class will still be 95% correct. This renders measures like classification accuracy meaningless. For this reason I have also printed the *balanced accuracy* that is more relevant in this case because it gives same weight to both classes. It is defined as the arithmetic mean of sensitivity (TP / (TP + FN)) and specificity (TN /(TN + FP)). [8]
+
+Let's move to introduce a new model, in order to see if it's better to change the actual model or not. 
+
+## Second Model 
+
+To have a comparison with the first model,  I have implemented another linear classifier which uses the same predictors but another link function, the *complementary log-log*. 
+$cloglog(p_i) = log(-log(1 - p_i) = \beta_{0} + \beta_{2} \cdot x_{2_i} +  \beta_{8} \cdot x_{8_i}$
+
+I have wanted to try this function because I have read that it often produce different results from the logit and probit link functions. 
+
+```{r}
+model2 <- function(){
+  # Likelihood
+  for (i in 1:N){
+    y[i] ~ dbern(p[i])
+    cloglog(p[i]) <-  beta0 +  beta2*x2[i] + beta8*x8[i] 
+  }
+  
+  # Defining the prior beta parameters
+  beta0 ~ dnorm(0, 1.0E-6)
+  beta2 ~ dnorm(0, 1.0E-6)
+  beta8 ~ dnorm(0, 1.0E-6)
+}
+
+# Passing the data for RJags
+y <- as.vector(dat_train$stroke)
+data.jags <- list("y" = y, "N" = N,
+                  "x2" = x2, "x8" = x8) 
+
+# Defining parameters of interest to show after running RJags
+mod.params <- c("beta0", "beta2", "beta8")
+
+# Run JAGS
+n.chains <- 3
+t_start = Sys.time()
+mod.fit2 <- jags(data = data.jags,                                                   # DATA
+                model.file = model2,                                                 # MODEL
+                parameters.to.save = mod.params,                                    # TRACKING
+                n.chains = n.chains, n.iter = 10000, n.burnin = 1000, n.thin = 10)  # MCMC
+tempo_fit2 = round(Sys.time() - t_start,2)
+mod.fit2$BUGSoutput$summary
+```
+```{r, echo = FALSE}
+cat(paste("The DIC of the model is: ", mod.fit2$BUGSoutput$DIC))
+```
+
+```{r echo=FALSE, fig.align="center"}
+# Plots with BayesPlot
+chainArray <- mod.fit2$BUGSoutput$sims.array
+
+color_scheme_set("viridisE")
+# considering to split each couples of parameters
+bayesplot::mcmc_combo(chainArray, combo = c("dens_overlay", "trace"), pars = c("beta0", "beta2"))
+bayesplot::mcmc_combo(chainArray, combo = c("dens_overlay", "trace"), pars = c("beta8", "deviance"))
+```
+
+```{r echo=FALSE, fig.align="center", fig.width=10, fig.height=10}
+coda.fit2 <- coda::as.mcmc(mod.fit2)
+coda::acfplot(coda.fit2)
+
+autocorr.diag(as.mcmc(mod.fit2))
+```
+
+```{r, echo=FALSE}
+# Saving the estimated beta parameters
+beta_est2 <- list("beta0" = mod.fit2$BUGSoutput$summary["beta0", "mean"],
+                 "beta2" = mod.fit2$BUGSoutput$summary["beta2", "mean"],
+                 "beta8" = mod.fit2$BUGSoutput$summary["beta8", "mean"])
+
+
+pred_2 <- beta_est2$beta0 + beta_est2$beta2*x_age_test + beta_est2$beta8*x_glucose_test 
+
+probs_pred2<- 1 - exp(- exp(pred_2))
+## Predictions
+
+y_pred_2<- rbinom(nrow(dat_test), 1, probs_pred2)
+
+# Confusion matrix
+conf_mtx_2 <- as.data.frame(round(table(dat_test$stroke, y_pred_2), digits = 3))
+
+example2 <- confusionMatrix(data=as.factor(y_pred_2), reference = as.factor(dat_test$stroke))
+
+hchart(conf_mtx_2, type = "heatmap", hcaes(x = Var1, y = y_pred_2, value = Freq)) %>%
+  hc_title(text = "The Confusion Matrix") %>%
+  hc_plotOptions(
+             series = list(
+                borderColor = "#fcfbfa",
+                borderWidth = 1,
+                animation=(durtion=1000),
+                dataLabels = list(enabled = TRUE)
+  )) %>%
+      hc_xAxis(title=list(text="Actual Values"))  %>%
+         hc_yAxis(title=list(text="Predicted Values") )
+
+cat(paste("The overall accuracy is: ", example2$overall[1]))
+cat(paste("The balanced accuracy is: ", example2$byClass[11]))
+
+```
+
+## Data Augmentation through SMOTE
+
+Here my goal is to balance my dataset and since my dataset is quite small I have preferred to apply SMOTE (Synthetic Minority Oversampling Technique) rather than an undersampling technique.
+
+Through SMOTE the new instances are not just copies of existing minority cases, but it is an algorithm loops over each observation in the minority class. At each loop iteration, it identifies its k nearest neighbors.
+After the neighbors have been selected, the algorithm takes the difference between the feature vector of the minority member and the individual neighbors. Each difference is then multiplied by a random number in (0, 1). This constructs synthetic observations in the direction of each member, which are located at a random distance from the minority member. So new synthetic minority instances are generated somewhere between the minority instance and that neighbor.[7]
+
+So I have reused my first model and repeat my analysis but with the new augmented dataset. I show how the proportion between healthy people and patients who had stroke 
+is changed.
+
+```{r echo=FALSE}
+dat_1 <- dat
+for(i in 1:nrow(dat_1)){
+  
+  if(dat_1[i, "gender"] == "Male"){
+    dat_1[i, "gender"] = 0
+  }else if (dat_1[i, "gender"] == "Female"){
+    dat_1[i, "gender"] = 1
+  }else{
+    dat_1[i, "gender"] = 2
+  }
+  
+  if(dat_1[i, "ever_married"] == "Yes"){
+    dat_1[i, "ever_married"] = 1
+  }else{
+    dat_1[i, "ever_married"] = 0
+  }
+  
+  if(dat_1[i, "Residence_type"] == "Urban"){
+    dat_1[i, "Residence_type"] = 1
+  }else{
+    dat_1[i, "Residence_type"] = 0
+  }
+  
+  if(dat_1[i, "work_type"] == "Private"){
+    dat_1[i, "work_type"] = 0
+  } else if(dat_1[i, "work_type"] == "Self-employed") {
+    dat_1[i, "work_type"] = 1
+  } else if(dat_1[i, "work_type"] == "Govt_job") {
+    dat_1[i, "work_type"] = 2
+  } else if(dat_1[i, "work_type"] == "Never_worked") {
+    dat_1[i, "work_type"] = 3
+  } else{
+    dat_1[i, "work_type"] = 4
+  }
+  
+    
+  if(dat_1[i, "smoking_status"] == "smokes"){
+    dat_1[i, "smoking_status"] = 0
+  } else if(dat_1[i, "smoking_status"] == "formerly smoked"){
+    dat_1[i, "smoking_status"] = 1
+  }else if(dat_1[i, "smoking_status"] == "never smoked"){
+    dat_1[i, "smoking_status"] = 2
+  }else{
+    dat_1[i, "smoking_status"] = 3
+  }
+
+}
+dat_1["gender"] = lapply(dat_1["gender"], function(x) as.numeric(as.character(x)))
+dat_1["ever_married"] = lapply(dat_1["ever_married"], function(x) as.numeric(as.character(x)))
+dat_1["Residence_type"] = lapply(dat_1["Residence_type"], function(x) as.numeric(as.character(x)))
+dat_1["work_type"] = lapply(dat_1["work_type"], function(x) as.numeric(as.character(x)))
+dat_1["smoking_status"] = lapply(dat_1["smoking_status"], function(x) as.numeric(as.character(x)))
+```
+
+```{r, echo=FALSE}
+#use SMOTE to create new dataset that is more balanced
+set.seed(1234)
+aaaa = SMOTE(dat_1, dat_1$stroke)
+dat_1_aug = aaaa$data
+propp1 <- table(dat_1_aug$stroke)
+propp <- prop.table(table(dat_1_aug$stroke))
+propp3 <- table(dat_1$stroke)
+propp4 <- prop.table(table(dat_1$stroke))
+par(mfrow=c(1,2))
+#view distribution of response variable in new dataset
+tab1 <- barplot(propp3, col = c("lightgreen", "salmon"), main="Old proportion of Stroke in the Dataset", names.arg = c("Healthy", "Had a Stroke"), ylim = c(0, 5000), ylab = "No. of Observations")
+text(tab1[1], propp3[1]-2000 , paste("", round(100 * propp4[1], 2), sep="%") ,cex=1.2) 
+text(tab1[2], propp3[2]+500 , paste("", round(100 * propp4[2], 2), sep="%") ,cex=1.2) 
+
+#view distribution of response variable in new dataset
+tab <- barplot(propp1, col = c("lightgreen", "salmon"), main="New proportion of Stroke in the Dataset", names.arg = c("Healthy", "Had a Stroke"), ylim = c(0, 5000), ylab = "No. of Observations")
+text(tab, propp1-2000 , paste("", round(100 * propp,2), sep="%") ,cex=1.2) 
+
+#sampling indices from the main dataset
+idxtr <- sample(1:nrow(dat_1_aug),0.7*nrow(dat_1_aug))
+
+dat_train_aug  <- dat_1_aug[idxtr,]
+dat_test_aug   <- dat_1_aug[-idxtr,]
+N_aug          <- nrow(dat_train_aug)# number of train
+
+
+# Dependent Variable
+y_aug <- as.factor(dat_train_aug$stroke) # Target variable, risks stroke?
+
+# Independent Variables
+x1_aug <- as.vector(dat_train_aug$gender) 
+x2_aug <- as.vector(scale(dat_train_aug$age)) 
+x3_aug <- as.vector(dat_train_aug$hypertension)
+x4_aug <- as.vector(dat_train_aug$heart_disease)
+x5_aug <- as.vector(dat_train_aug$ever_married)
+x6_aug <- as.vector(dat_train_aug$work_type) 
+x7_aug <- as.vector(dat_train_aug$Residence_type)
+x8_aug <- as.vector(scale(dat_train_aug$avg_glucose_level)) 
+x9_aug <- as.vector(scale(dat_train_aug$bmi)) 
+x10_aug <- as.vector(dat_train_aug$smoking_status)
+
+
+model_3 <- function(){
+  # Likelihood
+  for (i in 1:N_aug){
+    y_aug[i] ~ dbern(p[i])
+    logit(p[i]) <-  beta0 +  beta2*x2_aug[i] + beta8*x8_aug[i] 
+  }
+  
+  # Defining the prior beta parameters
+  beta0 ~ dnorm(0, 1.0E-6)
+  beta2 ~ dnorm(0, 1.0E-6)
+  beta8 ~ dnorm(0, 1.0E-6)
+}
+
+y_aug <- as.vector(dat_train_aug$stroke)
+data1.jags <- list("y_aug" = y_aug, "N_aug" = N_aug,
+                  "x2_aug" = x2_aug, 
+                  "x8_aug" = x8_aug) 
+
+# Defining parameters of interest to show after running RJags
+mod1.params <- c("beta0", "beta2", "beta8")
+
+# Run JAGS
+n.chains <- 3
+t_start = Sys.time()
+mod.fit3 <- jags(data = data1.jags,                                                   #DATA
+                 model.file = model_3,                                               #MODEL
+                 parameters.to.save = mod1.params,                                    #TRACKING
+                 n.chains = n.chains, n.iter = 10000, n.burnin = 1000, n.thin = 10)  #MCMC
+
+tempo_fit3 = round(Sys.time() - t_start,2)
+mod.fit3$BUGSoutput$summary
+```
+```{r, echo = FALSE}
+cat(paste("The DIC of the model is: ", mod.fit3$BUGSoutput$DIC))
+```
+
+I cannot compare this DIC with others obtained before because now I am not using the same data, so I cannot compare likelihoods!  
+
+```{r echo=FALSE, fig.align="center"}
+# Plots with BayesPlot
+chainArray <- mod.fit3$BUGSoutput$sims.array
+
+color_scheme_set("viridisC")
+# considering to split each couples of parameters
+bayesplot::mcmc_combo(chainArray, combo = c("dens_overlay", "trace"), pars = c("beta0", "beta2"))
+bayesplot::mcmc_combo(chainArray, combo = c("dens_overlay", "trace"), pars = c("beta8", "deviance"))
+```
+
+```{r echo=FALSE, fig.align="center", fig.width=10, fig.height=10}
+coda.fit3 <- coda::as.mcmc(mod.fit3)
+coda::acfplot(coda.fit3)
+
+autocorr.diag(as.mcmc(mod.fit3))
+```
+
+```{r, echo=FALSE}
+dat_test_aug[c(2,3,4,5,8,9,10)] <- lapply(dat_test_aug[c(2,3,4,5,8,9,10)], function(x) c(scale(x))) # scaling for predicting better than before
+
+x_age_test_aug  <- as.numeric(dat_test_aug$age)
+x_married_test_aug  <- as.numeric(dat_test_aug$ever_married)
+x_glucose_test_aug  <- as.numeric(dat_test_aug$avg_glucose_level)
+
+# Saving the estimated beta parameters
+beta_est3 <- list("beta0" = mod.fit3$BUGSoutput$summary["beta0", "mean"],
+                 "beta2" = mod.fit3$BUGSoutput$summary["beta2", "mean"],
+                 "beta8" = mod.fit3$BUGSoutput$summary["beta8", "mean"])
+
+
+pred_aug <- beta_est3$beta0 + beta_est3$beta2*x_age_test_aug + beta_est3$beta8*x_glucose_test_aug 
+
+probs_pred_aug <- exp(pred_aug)/(1+exp(pred_aug))
+## Predictions
+
+y_pred_aug<- rbinom(nrow(dat_test_aug), 1, probs_pred_aug)
+
+# Confusion matrix
+conf_mtx_aug <- as.data.frame(round(table(dat_test_aug$stroke, y_pred_aug), digits = 3))
+
+example_aug <- confusionMatrix(data=as.factor(y_pred_aug), reference = as.factor(dat_test_aug$stroke), mode="everything")
+
+hchart(conf_mtx_aug, type = "heatmap", hcaes(x = Var1, y = y_pred_aug, value = Freq)) %>%
+  hc_title(text = "The Confusion Matrix") %>%
+  hc_plotOptions(
+             series = list(
+                borderColor = "#fcfbfa",
+                borderWidth = 1,
+                animation=(durtion=1000),
+                dataLabels = list(enabled = TRUE)
+  )) %>%
+      hc_xAxis(title=list(text="Actual Values"))  %>%
+         hc_yAxis(title=list(text="Predicted Values") )
+
+
+cat(paste("The overall accuracy is: ", example_aug$overall[1]))
+cat(paste("The balanced accuracy is: ", example_aug$byClass[11]))
+
+```
+
+## Comparing Performances
+
+Here I print a summary of all the measures taken along the way:
+
+```{r, echo=FALSE}
+perf <- data.frame("DIC" = c(mod.fit$BUGSoutput$DIC, mod.fit2$BUGSoutput$DIC, mod.fit3$BUGSoutput$DIC),
+           #"AIC" = c(aic_m1, aic_m2,  aic_m3),
+           "Running Time" = c(tempo_fit1,tempo_fit2,tempo_fit3),
+           "Accuracy" = c(example1$overall[1], example2$overall[1], example_aug$overall[1]),
+           "Balanced Accuracy" = c(example1$byClass[11],example2$byClass[11],example_aug$byClass[11]))
+rownames(perf) <- c("First Model","Second Model", "First Model Data Augmentation") 
+perf
+```
+
+Comparing the DIC, the second model is better than the first one. Furthermore it shows a better balanced accuracy, and this is very important because the minority class is the most relevant. On the other hand the time to run it is more than three times greater. Here it is acceptable because the original dataset is quite small, but in other situation this could be a problem. For example on the augmented dataset I have reused the first model and not the second one because, increasing the observation doubles the running time. However the balanced accuracy is increased a lot, up to 0.69 so it was valuable applied this technique to the dataset. 
+
+## Further Work
+
+I pointed different new improvements that could be done in a future time:
+
+- Create different models using different binary classifiers like: SVM, K-Nearest Neighbours, Decision Tree etc...
+
+- More interesting plots to describe the data
+
+- Consider, after oversampling the dataset, a validation set to tune better the parameters
+
+- Use other link functions
+
+- Add other metrics in the predictions part like: F1 Score, Recall, Precision etc..
+
+## References 
+
+1. https://www.world-stroke.org/world-stroke-day-campaign/why-stroke-matters/learn-about-stroke#:~:text=Globally%201%20in%204%20adults,the%20world%20have%20experienced%20stroke.
+
+2. https://pubmed.ncbi.nlm.nih.gov/21557809/
+
+3. https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset
+
+4. https://my.clevelandclinic.org/health/diagnostics/12363-blood-glucose-test#:~:text=A%20blood%20glucose%20test%20is,indicate%20pre%2Ddiabetes%20or%20diabetes.
+
+5. https://www.salute.gov.it/portale/nutrizione/dettaglioIMCNutrizione.jsp?lingua=italiano&id=5479&area=nutrizione&menu=vuoto
+
+6. https://www.researchgate.net/publication/349610159_Multiple_Balance_Subsets_Stacking_for_Imbalanced_Healthcare_Datasets
+
+7. https://www.dominodatalab.com/blog/smote-oversampling-technique
+
+8. https://neptune.ai/blog/balanced-accuracy#:~:text=Balanced%20Accuracy%20is%20used%20in,lot%20more%20than%20the%20other.
+
+9. http://www.sthda.com/english/articles/37-model-selection-essentials-in-r/154-stepwise-regression-essentials-in-r/
+
+10. https://topepo.github.io/caret/variable-importance.html
+
+11. Lectures slides
+
+12. https://www.kaggle.com/code/nulldata/beginners-guide-to-highchart-visual-in-r/report
