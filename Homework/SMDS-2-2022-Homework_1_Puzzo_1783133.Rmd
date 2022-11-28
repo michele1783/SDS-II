@@ -1,0 +1,483 @@
+---
+title: "Homework #01"
+subtitle: "Statistical Methods in Data Science II & Lab"
+author: "2021/2022"
+date: "deadline April 22th, 2022"
+output:
+  html_document:
+    keep_md: yes
+    theme: united
+  pdf_document:
+    keep_tex: yes
+    toc: no
+header-includes: 
+              - \usepackage[english]{babel}
+              - \usepackage{amsmath}
+              - \usepackage{enumerate}
+              - \usepackage{setspace}
+              - \usepackage{docmute}
+              - \usepackage{fancyhdr}
+              - \usepackage{graphicx}
+              - \usepackage{rotating}
+              - \usepackage{ucs}
+              - \pagestyle{fancy}
+              - \fancyhf{}
+              - \rhead{Test \#01}
+              - \cfoot{\thepage}
+---
+
+
+```{r setup, include=FALSE}
+library(knitr)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# the default output hook
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  if (!is.null(n <- options$out.lines)) {
+    x = unlist(stringr::str_split(x, '\n'))
+    if (length(x) > n) {
+      # truncate the output
+      x = c(head(x, n), '....\n')
+    }
+    x = paste(x, collapse = '\n') # paste first n lines together
+  }
+  hook_output(x, options)
+})
+```
+
+```{r, include=FALSE, include=FALSE, warning=FALSE}
+opts_chunk$set(out.lines = 23)
+```
+
+
+```{r,echo=FALSE}
+load("Homework_1.RData")
+my_id <- 104
+library(TeachingDemos)
+```
+
+
+
+## Puzzo Michele Luca 1783133
+
+\vspace*{0cm}
+
+
+\noindent *Your answers for each data analysis question should discuss the problem, data, model, method, conclusions. 
+
+\vspace*{1cm}
+### Fully Bayesian conjugate analysis of Rome car accidents
+
+Consider the car accident in Rome (year 2016) contained in the `data.frame` named `roma`. Select your data using the following code
+```{r}
+mydata <- subset(roma,subset=sign_up_number==104)
+y_obs<-mydata$car_accidents
+str(mydata)
+```
+
+The column `car_accidents` contains the number of car accidents $Y_i=y_i$ occurred in a specific weekday during a specific hour of the day in some of the weeks of 2016. Using the observed outcomes of the number of car accidents do a fully Bayesian analysis using as a statistical model a conditionally i.i.d. Poisson distribution with unknown parameter. Take into account that it is known that the average number of hourly car accidents occurring in Rome during the day is **3.22**.
+In particular do the following:
+
+### 1. Describe your observed data
+
+To have an idea of the observed data, that represent the number of car accidents occurred Saturday at 9 in 19 weeks of 2016, I have used the function *summary* so to have the quantiles, the mean, the minimum and the maximum. Then I have computed also the variance and the mode. 
+
+```{r, echo=FALSE}
+
+#summary of the dataset
+summary(y_obs)
+
+#variance and mode of observed data
+data.frame("Variance" = round(var(y_obs), 3), "Mode" = y_obs[which.max(tabulate(match(y_obs, unique(y_obs))))])
+```
+
+Moreover I have represented the distribution of the data through an histogram. I have not plotted a density, but I have just wanted the frequency of the number of car accidents during the weeks. 
+
+```{r, echo=FALSE}
+#histogram
+#with the function hist I could not capture that in one week there is one car accident,
+#so I have used the function tabulate that builds that bins of the histogram 
+bins <- tabulate(y_obs, nbins=length(y_obs))
+plot(bins[1:10], col ="darkgreen", type = "h", lwd = 3,main="Distribution of the data", xlab = "Car accidents", ylab = "Frequency")
+
+#just adding at the end of each bar a point to highlight where the bar ends
+points(bins[1:10],pch=19,col="darkgreen")
+grid()
+```
+
+From the histogram it is easier understand that the mode is three. In no week there are more than eight car accidents. 
+
+### Ingredients of my Bayesian model
+
+Bayesian Model Setup provide a fully probabilistic representation of a joint space made by cartesian product of observation space and space of parameters. This joint space is provided by joint probability distribution by means of two main ingredients: prior distribution of $\theta$ and statistical model of y for a given $\theta$. $j(y,\theta) = f(y|\theta) \cdot \pi(\theta)$
+
+From the instruction we know that as a statistical model for Y, in other words the likelihood function, is a conditionally i.i.d Poisson distribution with unknown parameter $\theta$ so we have $Y_1, ..., Y_n|\theta \sim f(y_1, ..., y_n|\theta) = \prod_{i=1}^{n} (y_i|\theta) = \prod_{i=1}^{n} \frac{e^{-\theta}\theta^{y_i}}{y_i!}$.
+
+I would like to show four different plots, varying the unknown parameter $\theta$ to notice how the behaviour of the data changes once a particular theta parameter is given.
+
+```{r, echo=FALSE}
+#different values of theta
+theta <- c(2,3.22,6,10)
+
+#function to do the same kind of plot
+plott <- function(obs, th){
+  #input
+  #obs: y_obs of dataset
+  #th: different value of unknown parameter
+  
+  #output
+  #a plot of the likelihood
+  main <- bquote(pi(y[1] ,..., y[3]*"|"*theta) %~% Poisson(.(th)))
+  plot(y_obs, dpois(obs, lambda = th[1]), xlab="observations", ylab="likehood", main=main, col = "salmon", pch = 19)
+grid()
+}
+
+#visualization of plots more compact
+par(mfrow=c(2,2))
+
+#different 4 plot of the likelihood
+plott(y_obs, theta[1])
+plott(y_obs, theta[2])
+plott(y_obs, theta[3])
+plott(y_obs, theta[4])
+
+
+```
+
+From now on we can neglect in the likelihood function all the components that are not depending on $\theta$ so we will work proportionally: $f(y_1, ..., y_n|\theta) = L_\underline{Y}(\theta) \propto e^{-n\theta}\theta^{\sum_{i=1}^{n} y_i}$. 
+
+Regarding the second main ingredient of the Bayesian Model Setup If I choose as prior distribution within a suitable class of distribution called **Conjugate Prior Class** then the posterior distribution is another member of the same class of this distribution. As we have seen in class, when we have a likelihood function distributed as a Poisson, I would like to have as prior a function like $e^{-a\theta} \cdot \theta ^b$ so in this way we can obtain a posterior function of the same kind. So a suitable prior distribution which leads the posterior within the same family that turns out to be the **Gamma Distribution** family with density:
+$\pi(\theta) = \theta^{s-1}e^{-r\theta}\cdot \frac{r^{s}}{\Gamma(s)} \cdot \mathbb{I}_{(0, +\infty)}(\theta) \propto \theta^{s-1}e^{-r\theta}$ with $r,s > 0$ where *r* is the rate and *s* is the shape. 
+
+From the instruction we know that the average number of hourly car accidents occurring in Rome during the day is 3.22, so I have that $\mathbb{E_{\pi_h}}[\theta] = 3.22$. 
+
+Moreover I know that: $\mathbb{E}[\theta] = \frac{s}{r}$ and  $\mathbb{Var}[\theta] = \frac{s}{r^2}$. So I have to determine the prior values of *r* and *s*. Looking at Hoff's book, "A First Course in Bayesian Statistical Methods", page 52, I know that I can obtain a weakly informative prior distribution setting the parameter *r* = 1. In this way I have that $s = \mathbb{E}[\theta] = 3.22$ and $r = 1$. 
+
+Now, I want to plot the prior distribution:
+
+```{r, echo=FALSE}
+#prior parameters
+r_prior <- 1
+s_prior <- 3.22
+
+#plot of a gamma distribution with prior parameters
+curve(dgamma(x, rate=r_prior, shape=s_prior), from=0, to=12, xlab=expression(theta), ylab= expression(pi(theta)), main="Prior Distribution",col="orchid", lwd=3)
+grid()
+```
+
+### 3. Main inferential findings
+
+#### Posterior Distribution
+
+The Bayesian inference engine is the probabilistic rule with which we know how to update the state of uncertainty once we get some information, in this case the observation of some data. The conditioning rule is the Bayes rule: 
+$\pi(\theta|y_1, ..., y_n) = \frac{\pi(y_1, ..., y_n|\theta)\pi(\theta)}{\pi(y_1, ..., y_n)}$
+
+where the main ingredients are:
+
+- $\pi(\theta|y_1, ..., y_n)$ is the posterior distribution
+- $\pi(y_1, ..., y_n|\theta)$ is the likelihood function
+- $\pi(\theta)$ is the prior distribution.
+
+So working proportionally I can obtain:
+
+$\pi(\theta|y_1, ..., y_n) = \frac{\pi(y_1, ..., y_n|\theta)\pi(\theta)}{\pi(y_1, ..., y_n)} \propto \pi(y_1, ..., y_n|\theta)\pi(\theta) =e^{-n\theta}\theta^{\sum_{i=1}^{n} y_i}e^{-r\theta}\theta^{s-1} = e^{-(n+r)\theta}\theta^{(s+\sum_{i=1}^{n} y_i)-1}$
+
+So the posterior is also a Gamma distribution and the parameters are: $\pi(\theta|y_1, ..., y_n) \sim Gamma\Big(r^* = n + r, \,\,s^* = s+ \sum_{i=1}^{n} y_i\Big)$
+
+Now I want to make a visualization of posterior distribution and also see how the parameters of the Gamma distribution have been changed. 
+
+```{r, echo=FALSE}
+# updated parameters
+r_post <- r_prior + length(y_obs)
+s_post <- s_prior + sum(y_obs)
+
+#posterior distribution
+curve(dgamma(x,rate=r_post,shape=s_post),from=2,to=6,xlab=expression(theta),ylab=expression(pi(theta)),ylim=c(0,1),main=paste("Posterior distribution"),col="orange",lwd=3)
+grid()
+```
+
+#### Point estimates
+
+Now I have the posterior distribution $\pi(\cdot|y^{obs})$ and I want to use different point estimates to summarize it with just one value. 
+The first point estimate that I have computed is the *posterior mean* $\hat{\theta}_{Bayes, \mu} = \mathbb{E}(\theta|y^{obs}) = \frac{s^*}{r^*}$
+
+```{r, echo=FALSE}
+mean_post <- round(s_post/r_post, 2)
+median_post <- round(qgamma(0.5, shape=s_post, rate=r_post), 2)
+mode_post <- round((s_post-1)/r_post, 2)
+```
+
+Then I have computed *posterior median* $\hat{\theta}_{Bayes, Median}$:  represents the $\theta$ value which divides the distribution in half for which: \ $\hat{\theta}_{Bayes, Median} = {\displaystyle \int_{-\infty}^{\hat{\theta}_{Bayes, Median}}} \pi(\theta|y^{obs})d\theta =  \frac{1}{2}$
+
+At the end I have computed the *posterior mode*: it is the peak of the distribution. $\hat{\theta}_{bayes, Mode} = \operatorname{argmax}_{\theta \in \Theta} \pi(\theta|y^{obs}) = \frac{s^*-1}{r^*}$. (I have looked the formula on Wikipedia). I have put all my results in a data.frame. 
+
+```{r, echo=FALSE}
+data.frame("Mean" = mean_post, "Median" = median_post, "Mode" = mode_post, row.names = "Point Estimate")
+```
+
+The values that we have found are very similar among them because all of them try to capture the central tendency of the posterior distribution. I will see that the posterior variance is very low, so the posterior distribution is very concentrated on its mean. For this reason mode and median end up to be very similar to the mean. I also visualize them to see them better.
+
+```{r, echo=FALSE}
+#posterior distribution
+curve(dgamma(x, rate=r_post, shape=s_post), from=2, to=6, xlab=expression(theta), ylab= expression(pi(theta *"|"* y[1], ..., y[n])), main="",col="orange", lwd=3)
+
+title(main = "Posterior distribution with Point estimate")
+
+#mode
+abline(v=3.81, lty=1, col = "red", lwd = 2)
+
+#median
+abline(v=3.84, lty=1, col = "gray", lwd = 2)
+
+#mean
+abline(v=3.86,lty=1, col = "blue", lwd = 2)
+legend("topright", legend=c("Mode", "Median", "Mean"), col=c("red", "gray", "blue"), lty=1, lwd = 2)
+grid()
+```
+
+#### Posterior uncertainty
+Here, with the posterior parameters $r^*$ and $s^*$ I can compute the posterior mean and the posterior variance: $\mathbb{E}[\theta] = \frac{s^*}{r^*}$ and  $\mathbb{Var}[\theta] = \frac{s^*}{(r^*)^2}$. 
+I notice that the variance decreases a lot indeed the distribution is much concentrated on its mean. 
+
+```{r, echo=FALSE}
+#The posterior variance
+mean_var <- round(s_post/(r_post^2), 2)
+
+#prior and posterior mean
+mean <- c(3.22, mean_post)
+
+#prior and posterior variance
+var <- c(3.22, mean_var)
+
+#data.frame that sums up the prior and posterior uncertainty
+data.frame("Mean" = mean, "Variance" = var, row.names = c("Prior", "Posterior"))
+```
+
+Even after a small, 19, number of observations our prior beliefs have been updated. $\mathbb{E}[\theta]$ has been increased up to $\simeq$ 3.8 while variance in the posterior decreased of 1 order of magnitude. 
+
+#### Interval estimates
+
+In general it is not enough having a single point to sum up the entire posterior distribution so it is desirable have an interval estimate. During classes I have seen two recipes to compute it and the **Highest Posterior Density Interval** is always less or equal than Equal Tail Credible Interval so it is preferable.
+To compute it I have used the function *hpd* inside the library *TeachingDemos*. I have chosen as confidence level 0.95 while to compute the inverse cdf of the posterior distribution I have simply used function *qgamma*. 
+
+```{r, echo=FALSE}
+#the inverse cdf of the posterior distribution
+posterior_qf <- function(x) qgamma(x, s_post, r_post)
+
+#interval estimate
+interval_estimate_hpd <- hpd(posterior.icdf = posterior_qf, conf=0.95)
+paste("The HPD region in this case is between: ", round(interval_estimate_hpd[1], 5), " and ", round(interval_estimate_hpd[2], 5))
+
+#plotting the posterior distro visualizing the interval estimate
+curve(dgamma(x, rate=r_post, shape=s_post), from=2, to=6, main = "HPD Region at 95% of confidence", xlab=expression(theta), ylab= expression(pi(theta *"|"* y[1], ..., y[n])),col="orange", lwd=3)
+
+abline(v=interval_estimate_hpd[1],lty=2, lwd=2)
+abline(v=interval_estimate_hpd[2],lty=2, lwd=2)
+abline(h=dgamma(interval_estimate_hpd[1], shape = s_post, rate = r_post), lty=3, lwd=2)
+grid()
+
+```
+
+The 95% HPD confidence bounds tell us that with high probability that $\theta$ $\in$ [3,4.7]. 
+
+#### Differences between the prior and the posterior
+
+Here I want to visualize how the shape of the posterior has changed respected to the prior shape. Moreover I want to see how the parameter *r* and *s* have been changed from the prior and the posterior. Furthermore I visualize how the mean, the mode and the variance have changed from the prior to the posterior. The prior distribution incorporates the subjective beliefs about parameters, while posterior distribution is more informative since it includes the new observed data. 
+
+```{r,echo=FALSE}
+#vector containing prior and posterior parameters
+r <- c(r_prior, r_post)
+s <- c(s_prior, s_post)
+
+#dataframe to visualize how r and s change
+param <- data.frame("r" = r, "s" = s, row.names = c("Prior", "Posterior"))
+print(param)
+
+#prior mean, median and mode
+mean_prior <- round(s_prior/r_prior, 2)
+median_prior <- round(qgamma(0.5, s_prior, r_prior), 2)
+mode_prior <- round((s_prior-1)/r_prior, 2)
+
+#prior distribution, same as before
+curve(dgamma(x,rate=r_prior,shape=s_prior),from=0,to=6,xlab=expression(theta),ylab=expression(pi(theta)),ylim=c(0,1),main=paste("Comparison between Prior and Posterior distribution"),col="orchid",lwd=3)
+
+#vertical line to visualize prior mean, median and mode
+abline(v=mean_prior, lty=1, col = "blue", lwd = 2)
+abline(v=median_prior, lty=1, col = "gray", lwd = 2)
+abline(v=mode_prior,lty=1, col = "red", lwd = 2)
+
+#posterior distribution, same as before
+curve(dgamma(x,rate=r_post,shape=s_post),from=0,to=6,col="orange",lwd=3,add=TRUE)
+
+#vertical line to visualize posterior mean, median and mode
+abline(v=mean_post, lty=1, col = "blue", lwd = 2)
+abline(v=median_post, lty=1, col = "gray", lwd = 2)
+abline(v=mode_post,lty=1, col = "red", lwd = 2)
+
+#legend
+legend("topright", legend=c("Prior", "Posterior", "Mean", "Median", "Mode"), col=c("orchid", "orange", "blue", "gray", "red"), lty=1, lwd =2)
+grid()
+```
+
+From this plot I notice how mean, median and mode are more concentrated since the variance decreased a lot so the posterior distribution is much concentrated on its peak. 
+
+#### Posterior predictive distribution
+
+Until now I have observed $Y^{obs}$ and I want to predict $Y^{next}$. **Posterior Predictive Distribution** is defined as $Y^{next}|Y = y^{obs} \sim m(\cdot | y^{obs})$.
+As we have seen in class I can write: $Y^{next}|y^{obs} \sim \frac{J(y^{next}, y^{obs})}{J(y^{obs})} \propto J(y^{next}, y) = {\displaystyle \int_{\Theta} J(y_{next}, y, \theta) \,d\theta} = {\displaystyle \int_{\Theta} f(y^{next}|\theta) f(y|\theta) \pi(\theta) \,d\theta} \propto {\displaystyle \int_{\Theta} f(y^{next}|\theta) \frac{f(y|\theta)\pi(\theta)}{m(y)} \,d\theta} \propto {\displaystyle \int_{\theta}} f(y^{next}|\theta)\pi(\theta|y^{obs})d\theta$
+
+Before the experiment I had $m(y) = {\displaystyle \int_{\theta}} f(y|\theta)\pi(\theta)d\theta$, while now I have the same formula but with the posterior distribution instead of the prior one and the conditional model taking into account the uncertainty of the unknown parameter. 
+
+For predicting a new Gamma observation $Y_{next}$ after observing a $Y = y$ I have seen in the slides that: $Y^{next}|y \sim NegBin \Bigg( p = \frac{r_{prior}+n}{r_{prior}+n+1}, m = s_{prior} + \sum_{i=1}^{n} y_i\Bigg)$
+
+In conclusion I want to make a visual comparison between the posterior predictive distribution for a future observable with the actually observed data. 
+
+```{r, echo=FALSE}
+#number of observation
+n <- length(y_obs)
+
+#parameters of the negative binomials
+p <- (r_prior+n)/(r_prior+n+1)
+m <- (s_prior+sum(y_obs))
+
+#I compute the histogram for the observed data
+bins <- tabulate(y_obs, nbins=length(y_obs))
+
+plot(bins[1:10]/length(y_obs), col ="darkgreen",pch=19, main = "Posterior Predictive Distribution and Observations", xlab = "y", ylab = expression(pi(Y^{new}*"|"*y[1], ..., y[n])))
+
+#posterior predictive distribution
+points(dnbinom(0:10, p = p, size = m), pch = 19, col="salmon")
+
+
+#legend
+legend("topright", legend=c("Predictions", "Observations"), col=c("salmon", "darkgreen"), pch=c(19,19))
+grid()
+
+
+```
+
+\newpage
+
+### Bulb lifetime
+
+You work for Light Bulbs International. You have developed an innovative bulb, and you are interested in characterizing it statistically. You test 20 innovative bulbs to determine their lifetimes, and you observe the following data (in hours), which have been sorted from smallest to largest.
+
+Based on your experience with light bulbs, you believe that their lifetimes $Y_i$ can be modeled using an exponential distribution conditionally on $\theta$ where $\psi = 1/\theta$ is the average bulb lifetime.
+```{r fig.align="center", echo=FALSE}
+y_obs <- c(1, 13, 27, 43, 73, 75, 154, 196, 220, 297,
+344, 610, 734, 783, 796, 845, 859, 992, 1066, 1471)
+summary(y_obs)
+```
+
+### 1.Write the main ingredients of the Bayesian model.
+
+Bayesian Model Setup provide a fully probabilistic representation of a joint space made by cartesian product of observation space and space of parameters. This joint space is provided by joint probability distribution by means of two main ingredients: prior distribution of $\theta$ and statistical model of y for a given $\theta$. $j(y,\theta) = f(y|\theta) \cdot \pi(\theta)$ 
+
+From the instruction we know that the statistical model for Y or in other words, the likelihood function, first ingredient of the Bayesian Model Setup, can be written as: 
+
+$f(y_i|\theta)=\theta e^{-y_i\theta} \hspace{0.3 cm} \rightarrow \hspace{0.3 cm} f(y_1,\dots,y_n|\theta)= \prod_{i=1}^n \theta e^{-y_i\theta} = \theta^ne^{-\sum_i^ny_i\theta}$.
+
+For the second main ingredient of the Bayesian model setup, the prior distribution, I would like to have a function like $e^{-a\theta} \cdot \theta ^b$ so in this way we can obtain a posterior function of the same kind. So a suitable prior distribution which leads the posterior within the same family that turns out to be the **Gamma Distribution** family with density:
+$\pi(\theta) = \theta^{s-1}e^{-r\theta}\cdot \frac{r^{s}}{\Gamma(s)} \cdot \mathbb{I}_{(0, +\infty)}(\theta) \propto \theta^{s-1}e^{-r\theta}$ with $r,s > 0$ where *r* is the rate and *s* is the shape. Just like in the first part of the homework. 
+
+### 2. Conjugate Prior Distribution
+
+From the instruction it is known the prior belief over $\mathbb{E}[\theta]$ and $\mathbb{Var}[\theta]$: $\mathbb{E}[\theta] = \frac{s}{r} = 0.003$ and
+$\sqrt{\mathbb{Var}[\theta]} = \frac{\sqrt{s}}{r} = 0.00173$.
+It is possible to determine $h^{prior} = (r,s)$ Gamma hyperparameters solving these two equations:
+
+$s =\frac{(\mathbb{E}[\theta])^2}{\mathbb{Var}[\theta]} \approx 3.0$ and $r= \frac{\mathbb{E}[\theta]}{\mathbb{Var}[\theta]} \approx 1002.4$
+
+```{r, echo=FALSE}
+theta_mean<-0.003
+theta_var<-0.00173**2
+
+r_prior<-theta_mean/theta_var
+s_prior<-(theta_mean**2)/theta_var
+
+curve(dgamma(x, rate=r_prior, shape=s_prior), from=0, to=0.015, xlab=expression(theta), ylab=expression(pi(theta)), main = "Prior Distribution", col="darkgreen", ylim= c(0, 400), lwd=3)
+grid()
+```
+
+### 3. Argue why with this choice you are providing only a vague prior opinion on the average lifetime of the bulb.
+
+This choice I am providing only a vague prior opinion on the average lifetime of the bulb is due to the high value of the variance of $\theta$. Indeed this means that $\mathbb{E}[\theta]$ is unreliable and the dispersion around its value is really high. To quantify this high variability I can look at the coefficient of variation, defined as $\frac {\sqrt{\mathbb{Var}[\theta]}}{E[\theta]}$ and it is circa 0.58, definitely an high value. 
+
+### 4. Show that this setup fits into the framework of the conjugate Bayesian analysis
+
+Through the Bayesian Inference Engine (Bayes Rule) as posterior distribution, using the prior distribution and the statistical model defined in the first point, I obtain: 
+$\pi(\theta|y_1,\dots,y_n) \propto \pi(\theta)\cdot f(y_1,\dots,y_n|\theta) \propto e^{-r\theta}\theta^{s-1}\theta^ne^{-\sum_iy_i\theta} = e^{-\theta(r+\sum_i^ny_i)}\theta^{(s+n)-1}$.
+
+The posterior parameters of the gamma posterior distribution, $h^{post} = (r^*,s^*) =(r^* = r + \sum_{i=1}^{n} y_i, \, s^* = s + n)$
+
+```{r fig.align="center", echo=FALSE}
+curve(dgamma(x, rate=r_prior, shape=s_prior), from=0, to=0.010, ylab="", xlab=expression(theta),col="darkgreen", ylim= c(0, 900), lwd=2)
+grid()
+
+r_post <- r_prior + sum(y_obs)
+s_post <- s_prior + length(y_obs)
+  
+curve(dgamma(x, rate=r_post, shape=s_post), from=0, to=0.010, xlab=expression(theta),col="steelblue", add=TRUE, ylim= c(0, 400), lwd=3)
+grid()
+
+title(main = "Prior and posterior distribution")
+legend("topright", legend=c("Prior", "Posterior"), col=c("darkgreen", "steelblue"), lty=1, lwd=2)
+```
+
+The prior beliefs over the bulb lifetimes are deeply updated by the observed lifetimes.
+
+#### Main characteristics of the lifetime of yor innovative bulb
+
+To have an idea of the main characteristics of the lifetime of yor innovative bulb as in the first part of the homework I want to do a point estimate to sum up the posterior distribution that I have obtained. So just repeating what I have done in the first part of the homework I do a point and an interval estimate. The code is the same.
+
+```{r, echo=FALSE}
+mean_post <- round(s_post/r_post, 5)
+median_post <- round(qgamma(0.5, shape=s_post, rate=r_post), 5)
+mode_post <- round((s_post-1)/r_post, 5)
+data.frame("Mean" = mean_post, "Median" = median_post, "Mode" = mode_post, row.names = "Point Estimate")
+
+#the inverse cdf of the posterior distribution
+posterior_qf <- function(x) qgamma(x, s_post, r_post)
+
+#interval estimate
+interval_estimate_hpd <- hpd(posterior.icdf = posterior_qf, conf=0.95)
+paste("The HPD region in this case is between: ", round(interval_estimate_hpd[1], 5), " and ", round(interval_estimate_hpd[2], 5))
+
+#plotting the posterior distro visualizing the interval estimate
+curve(dgamma(x, rate=r_post, shape=s_post), from=0, to=0.005, main = "HPD Region at 95% of confidence", xlab=expression(theta), ylab= expression(pi(theta *"|"* y[1], ..., y[n])),col="orange", lwd=3)
+
+abline(v=interval_estimate_hpd[1],lty=2, lwd=2)
+abline(v=interval_estimate_hpd[2],lty=2, lwd=2)
+abline(h=dgamma(interval_estimate_hpd[1], shape = s_post, rate = r_post), lty=3, lwd=2)
+grid()
+```
+
+Also for this case, I can notice that mean, mode and median are very similar among them and the interval estimate is very shrinked around the peak. 
+
+Now to convert information about the $\theta$ into relevant information about $\frac{1}{\theta}$ I have to do the inverse of  the measurement that I have find: 
+
+```{r, echo=FALSE}
+mean_post <- round(1/(s_post/r_post), 5)
+median_post <- round(1/(qgamma(0.5, shape=s_post, rate=r_post)), 5)
+mode_post <- round(1/((s_post-1)/r_post), 5)
+data.frame("Mean" = mean_post, "Median" = median_post, "Mode" = mode_post, row.names = "Point Estimate")
+
+```
+
+They are values that are near to ones that I find doing the summary of the observed data, except for the median. 
+
+#### Average bulb lifetime $\frac{1}{\theta}$ exceeds 550 hours
+
+The probability that the average bulb lifetime $\frac{1}{\theta}$ exceeds 550 hours can be written as: $P\Big(\frac{1}{\theta} > 550 \Big| Y\Big) = P\Big(\theta < \frac{1}{550} \Big| Y\Big)$.
+
+I have wanted to compute this probability with both $h^{prior}$ and $h^{post}$ so to have an idea of how this probability updates itself. 
+
+```{r, echo=FALSE}
+data.frame("Prior" = pgamma(1/550, shape = s_prior, rate = r_prior), "Posterior" = pgamma(1/550, shape = s_post, rate = r_post), row.names = "Probability")
+```
+
+Just the 22% of bulbs have a lifetime that exceeds over 550 hours, while before the observations this probability seemed to be a bit higher. 
+\newpage
+
